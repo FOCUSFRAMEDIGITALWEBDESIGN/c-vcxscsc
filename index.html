@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="de">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="Landwirtschaftliches Flotten- und Feldmanagement für Traktorfahrer">
+  <meta name="theme-color" content="#1a3a14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Trecker">
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+  <title>Trecker Manager – Feldmanagement</title>
+</head>
+
+<body>
+  <div id="app">
+
+    <!-- ═══════════════════════════════════════════════════════
+       HEADER BAR
+  ════════════════════════════════════════════════════════ -->
+    <header id="header">
+      <div class="header-logo">
+        <span class="logo-icon">🚜</span>
+        <div>
+          <h1>Trecker Manager</h1>
+          <span>Feldmanagement & GPS-Tracking</span>
+        </div>
+      </div>
+      <div class="header-right">
+        <div id="gps-badge" title="GPS-Qualität">
+          <div id="gps-dot"></div>
+          <span id="gps-text">Kein GPS</span>
+        </div>
+        <div id="clock">--:--</div>
+        <button class="btn-icon" id="btn-settings" title="Einstellungen">⚙️</button>
+        <button class="btn-icon" id="btn-install" style="display:none" title="App installieren">📲</button>
+      </div>
+    </header>
+
+    <!-- ═══════════════════════════════════════════════════════
+       FLOATING MAP WIDGET
+  ════════════════════════════════════════════════════════ -->
+    <div id="map-widget" class="map-expanded">
+      <div id="map"></div>
+
+      <!-- Minimize/Maximize logic -->
+      <button id="btn-toggle-map-size" class="map-btn" onclick="
+        const widget = document.getElementById('map-widget');
+        if (widget.classList.contains('map-expanded')) {
+          widget.classList.remove('map-expanded');
+          widget.classList.add('map-minimized');
+          this.innerHTML = '🔲 Vergrößern';
+          setTimeout(() => MapMgr.map.invalidateSize(), 300);
+        } else {
+          widget.classList.remove('map-minimized');
+          widget.classList.add('map-expanded');
+          this.innerHTML = '➖ Minimieren';
+          setTimeout(() => MapMgr.map.invalidateSize(), 300);
+        }
+      ">➖ Minimieren</button>
+
+      <!-- Right-side controls -->
+      <div id="map-controls">
+        <button class="map-btn" id="btn-center-map" onclick="MapMgr.centerOnTractor()">
+          <span class="map-btn-icon">📍</span> Zentrieren
+        </button>
+        <button class="map-btn" id="btn-toggle-map-type" onclick="
+          const next = MapMgr.toggleMapType();
+          this.innerHTML = next === 'Satellit' ? '🛰️ Satellit' : '🗺️ Karte';
+        ">
+          🗺️ Karte
+        </button>
+      </div>
+
+
+
+      <!-- Manual draw controls -->
+      <div id="manual-draw-controls"
+        style="display:none; position:absolute; top:16px; left:16px; z-index:1000; gap:10px;">
+        <button class="map-btn" id="btn-manual-finish">✅ Abschließen</button>
+        <button class="map-btn danger" id="btn-manual-cancel">✖ Abbrechen</button>
+      </div>
+
+      <!-- Tracking info bar (bottom) -->
+      <div id="tracking-bar" class="hidden">
+        <div class="tracking-stat highlight">
+          <label>Zeit</label>
+          <value id="trk-time">00:00</value>
+        </div>
+        <div class="tracking-stat">
+          <label>Geschwindigkeit</label>
+          <value id="trk-speed">0 km/h</value>
+        </div>
+        <div class="tracking-stat">
+          <label>Strecke</label>
+          <value id="trk-dist">0 km</value>
+        </div>
+        <button id="btn-track-start">▶ Fahrt starten</button>
+        <button id="btn-track-stop">⏹ Stopp</button>
+      </div>
+
+      <!-- Start tracking button (always visible) -->
+      <div id="quick-track-container" style="position:absolute; bottom:20px; right:16px; z-index:1000;">
+        <button id="btn-quick-track" class="map-btn active" onclick="TripsModule.showTripStart()">
+          <span class="map-btn-icon">▶</span> Neue Fahrt
+        </button>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+       CONTENT AREA
+  ════════════════════════════════════════════════════════ -->
+    <main id="content">
+
+      <!-- Perimeter recording badge (Moved outside map) -->
+      <div id="perimeter-badge"
+        style="display:none; position:absolute; top:16px; left:50%; transform:translateX(-50%); z-index:1000; background:rgba(10,26,8,0.95); padding:10px 20px; border-radius:30px; border:1px solid var(--accent); align-items:center; gap:10px; box-shadow:0 4px 15px rgba(0,0,0,0.5);">
+        <div class="pulse-dot"></div>
+        <span style="font-weight:600; font-size:14px; color:var(--text-primary);">Perimeteraufzeichnung läuft...</span>
+        <button class="btn btn-primary btn-sm" id="btn-perimeter-corner" onclick="MapMgr.addPerimeterCorner()"
+          style="display:none; margin-left:10px;">📍 Ecke hinzufügen</button>
+        <button class="btn btn-danger btn-sm" id="btn-perimeter-stop">✅ Abschließen</button>
+      </div>
+
+
+
+      <!-- ───────────────────────────────────────────────────
+         VIEW: FELDER
+    ──────────────────────────────────────────────────── -->
+      <section id="view-fields" class="view">
+        <div class="view-inner">
+          <div class="view-header">
+            <h2 class="view-title">🌾 Felder</h2>
+            <button class="btn btn-primary" id="btn-new-field">+ Feld anlegen</button>
+          </div>
+
+          <!-- New field options -->
+          <div id="field-options-panel" style="display:none; flex-direction:column; gap:12px; margin-bottom:20px;">
+            <div class="card" style="padding:20px;">
+              <h3 style="font-size:15px; color:var(--text-secondary); margin-bottom:14px;">Wie soll das Feld angelegt
+                werden?</h3>
+              <div style="display:flex; gap:12px; flex-wrap:wrap;">
+                <button class="btn btn-primary" id="btn-field-gps" style="flex:1; min-width:180px;">
+                  🚜 GPS-Perimeterfahrt
+                </button>
+                <button class="btn btn-secondary" id="btn-field-manual" style="flex:1; min-width:180px;">
+                  ✏️ Manuell auf Karte
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Fields list -->
+          <div id="fields-list"></div>
+        </div>
+      </section>
+
+      <!-- ───────────────────────────────────────────────────
+         VIEW: FAHRTEN
+    ──────────────────────────────────────────────────── -->
+      <section id="view-trips" class="view">
+        <div class="view-inner">
+          <div class="view-header">
+            <h2 class="view-title">📋 Fahrten</h2>
+            <button class="btn btn-primary" id="btn-trip-start">+ Neue Fahrt</button>
+          </div>
+
+          <!-- Live tracking controls (when on trips view) -->
+          <div id="trips-track-bar"
+            style="display:none; gap:16px; align-items:center; padding:16px; background:var(--bg-card); border-radius:var(--radius); margin-bottom:16px; border:1px solid var(--accent-dim);">
+            <div style="flex:1; display:flex; gap:20px;">
+              <div class="tracking-stat highlight"><label>Zeit</label>
+                <value id="trk-time2">00:00</value>
+              </div>
+              <div class="tracking-stat"><label>km/h</label>
+                <value id="trk-speed2">0</value>
+              </div>
+              <div class="tracking-stat"><label>km</label>
+                <value id="trk-dist2">0</value>
+              </div>
+            </div>
+          </div>
+
+          <div id="trips-list"></div>
+        </div>
+      </section>
+
+      <!-- ───────────────────────────────────────────────────
+         VIEW: KOSTEN
+    ──────────────────────────────────────────────────── -->
+      <section id="view-costs" class="view">
+        <div class="view-inner">
+          <div class="view-header">
+            <h2 class="view-title">💰 Kosten</h2>
+          </div>
+
+          <!-- Total summary -->
+          <div class="cost-summary">
+            <div class="total-label">Gesamtkosten</div>
+            <div>
+              <span class="total-value" id="cost-total-value">0,00</span>
+              <span class="total-unit"> €</span>
+            </div>
+            <div style="display:flex; gap:24px; justify-content:center; margin-top:16px;">
+              <div class="stat-item" style="text-align:center;">
+                <label>Kraftstoff</label>
+                <value id="cost-fuel-total" class="accent">0 L</value>
+              </div>
+              <div class="stat-item" style="text-align:center;">
+                <label>Arbeitsstunden</label>
+                <value id="cost-hours-total" class="gold">0 h</value>
+              </div>
+            </div>
+          </div>
+
+          <!-- Configuration -->
+          <div class="config-section">
+            <h3>⚙️ Einstellungen</h3>
+            <div class="input-row">
+              <div class="form-group">
+                <label>Kraftstoffverbrauch (L/h)</label>
+                <input type="number" class="form-control" id="cfg-fuel-rate" min="1" max="50" step="0.5" value="12">
+              </div>
+              <div class="form-group">
+                <label>Maschinenstundensatz (€/h)</label>
+                <input type="number" class="form-control" id="cfg-machine-rate" min="1" max="500" step="1" value="45">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Dieselpreis (€/L)</label>
+              <div style="display:flex; gap:10px;">
+                <input type="number" class="form-control" id="cfg-diesel-price" min="0.5" max="5" step="0.01"
+                  value="1.65">
+                <button class="btn btn-secondary" id="btn-fetch-diesel"
+                  style="padding: 0 16px; min-width: 48px; border-radius: var(--radius-sm);"
+                  title="Live Preis in der Nähe abrufen">
+                  📍
+                </button>
+              </div>
+            </div>
+            <button class="btn btn-primary" id="btn-save-config" style="width:100%;">💾 Speichern &
+              Neuberechnen</button>
+          </div>
+
+          <!-- Per-trip cost list -->
+          <h3
+            style="font-size:15px; font-weight:700; color:var(--text-muted); margin-bottom:12px; text-transform:uppercase; letter-spacing:0.5px;">
+            Einsatzübersicht</h3>
+          <div id="costs-list"></div>
+        </div>
+      </section>
+
+      <!-- ───────────────────────────────────────────────────
+         VIEW: STATISTIK
+    ──────────────────────────────────────────────────── -->
+      <section id="view-stats" class="view">
+        <div class="view-inner">
+          <div class="view-header">
+            <h2 class="view-title">📊 Statistik</h2>
+            <button class="btn btn-ghost btn-sm" onclick="StatsModule.render()">🔄 Aktualisieren</button>
+          </div>
+
+          <!-- KPI Grid -->
+          <div class="stats-grid">
+            <div class="stat-card">
+              <span class="sc-icon">🌾</span>
+              <span class="sc-value" id="st-fields">0</span>
+              <span class="sc-unit">Felder</span>
+              <span class="sc-label">Gesamt erfasst</span>
+            </div>
+            <div class="stat-card">
+              <span class="sc-icon">🚜</span>
+              <span class="sc-value" id="st-trips">0</span>
+              <span class="sc-unit">Fahrten</span>
+              <span class="sc-label">Dokumentiert</span>
+            </div>
+            <div class="stat-card">
+              <span class="sc-icon">📍</span>
+              <span class="sc-value" id="st-dist">0</span>
+              <span class="sc-unit">km</span>
+              <span class="sc-label">Gefahren gesamt</span>
+            </div>
+            <div class="stat-card">
+              <span class="sc-icon">⏱️</span>
+              <span class="sc-value" id="st-hours">0</span>
+              <span class="sc-unit">Stunden</span>
+              <span class="sc-label">Betriebsstunden</span>
+            </div>
+            <div class="stat-card">
+              <span class="sc-icon">⛽</span>
+              <span class="sc-value" id="st-fuel">0</span>
+              <span class="sc-unit">Liter</span>
+              <span class="sc-label">Kraftstoff verbraucht</span>
+            </div>
+            <div class="stat-card">
+              <span class="sc-icon">💶</span>
+              <span class="sc-value" id="st-cost">0</span>
+              <span class="sc-unit">€</span>
+              <span class="sc-label">Gesamtkosten</span>
+            </div>
+          </div>
+
+          <!-- Fläche -->
+          <div class="stat-card" style="flex-direction:row; align-items:center; gap:16px; margin-bottom:20px;">
+            <span style="font-size:40px;">🗺️</span>
+            <div>
+              <div style="font-size:32px; font-weight:800; color:var(--accent-bright);" id="st-ha">0</div>
+              <div style="color:var(--text-muted); font-size:13px;">Hektar Gesamtfläche</div>
+            </div>
+          </div>
+
+          <!-- Charts -->
+          <div class="chart-card">
+            <h3>Fahrten nach Arbeitstyp</h3>
+            <canvas id="chart-worktype"></canvas>
+          </div>
+          <div class="chart-card">
+            <h3>Fahrten pro Monat (letzte 6 Monate)</h3>
+            <canvas id="chart-monthly"></canvas>
+          </div>
+        </div>
+      </section>
+
+    </main><!-- end #content -->
+
+    <!-- ═══════════════════════════════════════════════════════
+       BOTTOM NAVIGATION
+  ════════════════════════════════════════════════════════ -->
+    <nav id="nav">
+      <button class="nav-item active" data-view="map">
+        <span class="nav-icon">🗺️</span>
+        <span>Karte</span>
+      </button>
+      <button class="nav-item" data-view="fields">
+        <span class="nav-icon">🌾</span>
+        <span>Felder</span>
+      </button>
+      <button class="nav-item" data-view="trips">
+        <span class="nav-icon">🚜</span>
+        <span>Fahrten</span>
+      </button>
+      <button class="nav-item" data-view="costs">
+        <span class="nav-icon">💰</span>
+        <span>Kosten</span>
+      </button>
+      <button class="nav-item" data-view="stats">
+        <span class="nav-icon">📊</span>
+        <span>Statistik</span>
+      </button>
+    </nav>
+
+    <!-- ═══════════════════════════════════════════════════════
+       SETTINGS PANEL (slide-in from right)
+  ════════════════════════════════════════════════════════ -->
+    <aside id="settings-panel">
+      <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:20px;">
+        <h2 style="margin:0;">⚙️ Einstellungen</h2>
+        <button class="btn-icon" id="btn-settings-close">✕</button>
+      </div>
+
+      <div class="form-group">
+        <label>Traktorname</label>
+        <input type="text" class="form-control" id="cfg-tractor-name" placeholder="z.B. Fendt 724">
+      </div>
+
+      <div class="divider"></div>
+
+      <div style="font-size:13px; color:var(--text-muted); line-height:1.7;">
+        <b style="color:var(--text-secondary);">Über die App</b><br>
+        Trecker Manager v1.0<br>
+        Offline-fähige PWA für landwirtschaftliches Feldmanagement.<br><br>
+        <b style="color:var(--text-secondary);">Datenspeicherung</b><br>
+        Alle Daten werden lokal auf diesem Gerät gespeichert (IndexedDB). Es werden keine Daten an externe Server
+        übertragen.
+        <br><br>
+        <b style="color:var(--text-secondary);">Karten</b><br>
+        Satellitenbilder: ESRI World Imagery (kostenlos, kein API-Key nötig)
+      </div>
+
+      <div class="divider"></div>
+      <button class="btn btn-primary" id="btn-save-settings" style="width:100%;">💾 Speichern</button>
+
+      <div class="divider"></div>
+      <button class="btn btn-danger" style="width:100%;" onclick="
+      if(confirm('Alle Daten wirklich löschen?')) {
+        indexedDB.deleteDatabase('TreckerDB');
+        location.reload();
+      }
+    ">🗑️ Alle Daten löschen</button>
+    </aside>
+
+    <!-- ═══════════════════════════════════════════════════════
+       OVERLAY: NEW FIELD FORM
+  ════════════════════════════════════════════════════════ -->
+    <div id="overlay-field-form" class="overlay">
+      <div class="drawer">
+        <div class="drawer-handle"></div>
+        <div class="drawer-header">
+          <span class="drawer-title">🌾 Feld speichern</span>
+          <button class="btn-icon" onclick="FieldsModule.closeFieldForm()">✕</button>
+        </div>
+        <div class="drawer-body">
+          <input type="hidden" id="field-form-coords">
+          <input type="hidden" id="field-form-area">
+          <input type="hidden" id="field-form-source">
+
+          <div
+            style="background:var(--bg-panel); border-radius:var(--radius-sm); padding:14px; margin-bottom:18px; display:flex; align-items:center; gap:12px;">
+            <span style="font-size:28px;">📐</span>
+            <div>
+              <div style="font-size:11px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">
+                Berechnete Fläche</div>
+              <div style="font-size:24px; font-weight:800; color:var(--accent-bright);" id="field-form-area-disp">0 ha
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>Feldname *</label>
+            <input type="text" class="form-control" id="field-name-input" placeholder="z.B. Großes Südfeld">
+          </div>
+          <div class="form-group">
+            <label>Kulturart (optional)</label>
+            <select class="form-control" id="field-crop-input">
+              <option value="">— Bitte wählen —</option>
+              <option value="Weizen">🌾 Weizen</option>
+              <option value="Gerste">🌾 Gerste</option>
+              <option value="Raps">🌻 Raps</option>
+              <option value="Mais">🌽 Mais</option>
+              <option value="Zuckerrüben">🫚 Zuckerrüben</option>
+              <option value="Kartoffeln">🥔 Kartoffeln</option>
+              <option value="Grünland">🍀 Grünland</option>
+              <option value="Sonstiges">📦 Sonstiges</option>
+            </select>
+          </div>
+        </div>
+        <div class="drawer-footer">
+          <button class="btn btn-ghost" onclick="FieldsModule.closeFieldForm()">Abbrechen</button>
+          <button class="btn btn-primary" id="btn-save-field">✅ Feld speichern</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════
+       OVERLAY: NEW TRIP FORM
+  ════════════════════════════════════════════════════════ -->
+    <div id="overlay-trip-form" class="overlay">
+      <div class="drawer">
+        <div class="drawer-handle"></div>
+        <div class="drawer-header">
+          <span class="drawer-title">🚜 Fahrt konfigurieren</span>
+          <button class="btn-icon" onclick="TripsModule.closeTripForm()">✕</button>
+        </div>
+        <div class="drawer-body">
+          <div class="form-group">
+            <label>Arbeitsart</label>
+            <select class="form-control" id="trip-worktype-select">
+              <option value="transport">🚛 Transport</option>
+              <option value="bodenbearbeitung">🔄 Bodenbearbeitung</option>
+              <option value="aussaat">🌱 Aussaat</option>
+              <option value="ernte">🌾 Ernte</option>
+              <option value="duengung">💧 Düngung</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Feld (optional)</label>
+            <select class="form-control" id="trip-field-select">
+              <option value="">— Kein Feld —</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Material / Ladung</label>
+            <input type="text" class="form-control" id="trip-material-input" placeholder="z.B. Gülle, Weizen, leer...">
+          </div>
+        </div>
+        <div class="drawer-footer">
+          <button class="btn btn-ghost" id="btn-trip-cancel">Abbrechen</button>
+          <button class="btn btn-primary" id="btn-trip-save">▶ Fahrt starten</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast container -->
+    <div id="toast-container"></div>
+
+    <!-- ── Scripts ──────────────────────────────────────────── -->
+    <!-- Leaflet.js must load first -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+    <script src="js/db.js"></script>
+    <script src="js/gps.js"></script>
+    <script src="js/map.js"></script>
+    <script src="js/fields.js"></script>
+    <script src="js/trips.js"></script>
+    <script src="js/costs.js"></script>
+    <script src="js/stats.js"></script>
+    <script src="js/app.js"></script>
+
+</body>
+
+</html>

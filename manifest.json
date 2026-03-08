@@ -1,0 +1,38 @@
+{
+  "name": "Trecker Manager",
+  "short_name": "Trecker",
+  "description": "Landwirtschaftliches Flotten- und Feldmanagement",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "orientation": "landscape",
+  "theme_color": "#1a3a14",
+  "background_color": "#0a1a08",
+  "lang": "de",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Karte",
+      "url": "./index.html#map",
+      "description": "GPS-Karte öffnen"
+    },
+    {
+      "name": "Neue Fahrt",
+      "url": "./index.html#trips",
+      "description": "Fahrt aufzeichnen"
+    }
+  ]
+}
